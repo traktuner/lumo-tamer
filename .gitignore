@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.claude/
 config.yaml
 *.log
 .DS_Store
