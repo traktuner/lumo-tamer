@@ -52,22 +52,27 @@ auth:
   method: login
   login:
     binaryPath: "./dist/proton-auth"
-    # Must be a current Proton app version (see Post-Quantum note below)
-    appVersion: "web-lumo@5.0.0"
+    # Spoof a current Proton Drive macOS version (see Post-Quantum / CAPTCHA note below)
+    appVersion: "macos-drive@2.11.5+12386"
     userAgent: "Mozilla/5.0 ..."
 ```
 
 ### Limitations
 
-- **CAPTCHA**: May trigger CAPTCHA on Proton's servers (see tip above). The older
-  `macos-drive@...+rclone` version avoided CAPTCHA but is rejected for Post-Quantum accounts.
+- **CAPTCHA**: May trigger CAPTCHA on Proton's servers (see tip above), especially with
+  web/"unknown" app versions. Spoofing a desktop client (Proton Drive macOS) avoids this.
 - **No conversation sync**: Cannot fetch userKeys/masterKeys due to API scope restrictions
 - **TOTP only**: Only supports TOTP for 2FA (no security keys)
 
-> **Post-Quantum cryptography:** If your account opted into Proton's Post-Quantum crypto
-> feature, login fails with `APP_VERSION_BAD` (Code 5003, HTTP 422) when an outdated
-> `appVersion` is used. Use a current version like `web-lumo@5.0.0` (the default). If that
-> triggers a CAPTCHA the login method can't solve, use **browser** auth instead.
+> **App version, CAPTCHA & Post-Quantum:** The login appVersion has to thread two needles:
+> avoid CAPTCHA (Code 9001) *and* satisfy the Post-Quantum gate for opted-in accounts
+> (outdated versions fail with `APP_VERSION_BAD`, Code 5003). We spoof a current Proton Drive
+> macOS version (`macos-drive@<ver>`): desktop clients rarely get CAPTCHA'd, and a recent
+> version passes PQC. The old `macos-drive@1.0.0-alpha.1+rclone` avoided CAPTCHA but was
+> pre-PQC. If Proton rejects the default again, set it to a version+build shown in the
+> About dialog of a currently installed Proton Drive macOS app (or the latest
+> `MARKETING_VERSION` from https://github.com/ProtonDriveApps/mac-drive ). If you still get
+> a CAPTCHA, use **browser** auth.
 
 ### Troubleshooting
 

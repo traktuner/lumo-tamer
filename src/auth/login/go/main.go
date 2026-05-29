@@ -27,12 +27,13 @@ type AuthResult struct {
 	ErrorCode    int    `json:"errorCode,omitempty"`
 }
 
-// Default values for headers (can be overridden via CLI flags)
-// appVersion must be a current Proton app version: PQC-opted-in accounts reject
-// outdated versions with APP_VERSION_BAD (Code 5003, HTTP 422). lumo-tamer normally
-// passes --app-version from config.yaml; this default is only used when run standalone.
+// Default values for headers (can be overridden via CLI flags).
+// Spoof a CURRENT Proton Drive macOS version: desktop clients avoid CAPTCHA (Code 9001),
+// and a recent version passes the Post-Quantum gate (outdated versions => APP_VERSION_BAD,
+// Code 5003). Bump to the latest MARKETING_VERSION from ProtonDriveApps/mac-drive if needed.
+// lumo-tamer normally passes --app-version from config.yaml; this default is only used standalone.
 const (
-	defaultAppVersion = "web-lumo@5.0.0"
+	defaultAppVersion = "macos-drive@2.11.5+12386"
 	defaultUserAgent  = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 

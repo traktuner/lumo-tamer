@@ -38,13 +38,19 @@ auth:
   login:
     # Path to proton-auth Go binary
     binaryPath: "./dist/proton-auth"
-    # X-PM-AppVersion sent during SRP login.
-    # Must be a current Proton app version. Accounts that opted into Post-Quantum
-    # cryptography reject outdated versions with "APP_VERSION_BAD" (Code 5003, HTTP 422).
-    # We use the official WebClients Lumo version (keep in sync with packages/lumo/src/config.ts).
-    # The old rclone-style version ("macos-drive@1.0.0-alpha.1+rclone") avoided CAPTCHA but is
-    # rejected for PQC accounts. If you hit a CAPTCHA with the version below, use browser auth.
-    appVersion: "web-lumo@5.0.0"
+    # X-PM-AppVersion sent during SRP login. Format: <client>@<semver>.
+    # Two server-side gates apply here:
+    #   - CAPTCHA: Proton challenges "unknown"/web clients (Code 9001). Desktop clients
+    #     like Proton Drive macOS are far less likely to be challenged - this is why the
+    #     old "macos-drive@..." spoof was used.
+    #   - Post-Quantum: accounts that opted into PQC reject OUTDATED versions with
+    #     "APP_VERSION_BAD" (Code 5003). The old "macos-drive@1.0.0-alpha.1+rclone" was
+    #     pre-PQC and got rejected.
+    # We therefore spoof a CURRENT Proton Drive macOS version (real format: macos-drive@<ver>+<build>).
+    # Bump this to match a CURRENTLY installed Proton Drive macOS version (real format:
+    # macos-drive@<ver>+<build>, shown in the app's About dialog) if Proton rejects it again.
+    # If you still hit a CAPTCHA, use browser auth instead.
+    appVersion: "macos-drive@2.11.5+12386"
     userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 # Test/development configuration
