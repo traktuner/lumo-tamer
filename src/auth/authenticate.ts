@@ -94,6 +94,13 @@ export async function runAuthCommand(argv: string[]): Promise<void> {
     return runStatus();
   }
 
+  // Handle API key creation (mints a Lumo personal access token for the native API)
+  if (subArg === 'create-api-key' || subArg === 'api-key') {
+    const { runCreateApiKey } = await import('./create-api-key.js');
+    const days = argv[2] ? Number(argv[2]) : undefined;
+    return runCreateApiKey(argv[1] || undefined, Number.isFinite(days) ? days : undefined);
+  }
+
   print('=== lumo-tamer authentication ===\n');
 
   // Determine method: from arg or interactive prompt

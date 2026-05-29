@@ -40,6 +40,9 @@ Usage:
   tamer auth                 Interactive method selection
   tamer auth <method>        Use specific method (login, browser, rclone)
   tamer auth status          Show current authentication status
+  tamer auth create-api-key [name] [days]
+                             Mint a Lumo API key (personal access token) for the
+                             native OpenAI-compatible endpoint (default: lumo-tamer, 90)
   tamer auth --help          Show this help
 
 Methods:
