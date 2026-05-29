@@ -37,26 +37,51 @@ interface CreateTokenResponse {
     };
 }
 
-/** Build the PersonalAccessTokenKey: 32 random bytes PGP-encrypted to the primary public key (base64). */
-async function buildPersonalAccessTokenKey(armoredPrimaryKey: string): Promise<string> {
-    const publicKey = await openpgp.readKey({ armoredKey: armoredPrimaryKey });
+/** Build the PersonalAccessTokenKey: 32 random bytes PGP-encrypted to the given public key (base64). */
+async function buildPersonalAccessTokenKey(publicKey: openpgp.Key): Promise<string> {
     const tokenKeyBytes = crypto.getRandomValues(new Uint8Array(32));
     const message = await openpgp.createMessage({ binary: tokenKeyBytes });
     const encrypted = await openpgp.encrypt({ message, encryptionKeys: publicKey, format: 'binary' });
     return Buffer.from(encrypted as Uint8Array).toString('base64');
 }
 
-async function fetchPrimaryKey(api: ProtonApi): Promise<string> {
+/**
+ * Fetch the account's user keys and return the first one openpgp can parse,
+ * preferring the primary. Logs diagnostics so we can tell apart a scope issue,
+ * a malformed key, or a post-quantum key the bundled openpgp can't read.
+ */
+async function resolveEncryptionKey(api: ProtonApi): Promise<openpgp.Key> {
     const res = (await api({ url: 'core/v4/users', method: 'get' })) as UsersResponse;
     const keys = res.User?.Keys ?? [];
-    const primary =
-        keys.find((k) => k.Primary === 1 && k.Active === 1) ??
-        keys.find((k) => k.Primary === 1) ??
-        keys[0];
-    if (!primary?.PrivateKey) {
-        throw new Error('No account user key found via core/v4/users (cannot build PersonalAccessTokenKey)');
+    logger.info({ keyCount: keys.length }, 'Fetched account user keys');
+
+    if (keys.length === 0) {
+        throw new Error('core/v4/users returned no user keys (session may lack scope)');
     }
-    return primary.PrivateKey;
+
+    // Try primary/active first, then the rest.
+    const ordered = [...keys].sort((a, b) => (b.Primary - a.Primary) || (b.Active - a.Active));
+
+    let lastErr: unknown;
+    for (const k of ordered) {
+        const head = (k.PrivateKey || '').slice(0, 45).replace(/\n/g, '\\n');
+        try {
+            const key = await openpgp.readKey({ armoredKey: k.PrivateKey });
+            logger.info({ id: k.ID, primary: k.Primary, active: k.Active }, 'Using account key for token encryption');
+            return key;
+        } catch (e) {
+            lastErr = e;
+            logger.warn(
+                { id: k.ID, primary: k.Primary, active: k.Active, len: (k.PrivateKey || '').length, head, err: String(e) },
+                'Could not parse this account key, trying next'
+            );
+        }
+    }
+
+    throw new Error(
+        `None of the ${keys.length} account key(s) could be parsed by openpgp (last error: ${String(lastErr)}). ` +
+        'Likely a post-quantum key the bundled openpgp build cannot read.'
+    );
 }
 
 /**
@@ -76,8 +101,8 @@ export async function runCreateApiKey(name = 'lumo-tamer', expirationDays = 90):
     const api = provider.createApi();
 
     try {
-        const armoredPrimaryKey = await fetchPrimaryKey(api);
-        const personalAccessTokenKey = await buildPersonalAccessTokenKey(armoredPrimaryKey);
+        const publicKey = await resolveEncryptionKey(api);
+        const personalAccessTokenKey = await buildPersonalAccessTokenKey(publicKey);
         const expireTime = Math.floor(Date.now() / 1000) + expirationDays * 86400;
 
         const response = (await api({
