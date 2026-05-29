@@ -128,7 +128,10 @@ export class NativeToolCallProcessor {
         getMetrics()?.toolCallsTotal.inc({
           type: 'custom', status: 'misrouted', tool_name: strippedName
         });
-        logger.debug({ tool: toolCall.name, isBounce: this.isBounce }, 'Misrouted tool call detected');
+        logger.debug(
+          { tool: toolCall.name, arguments: toolCall.arguments, raw: json, isBounce: this.isBounce },
+          'Misrouted tool call detected'
+        );
 
         // Only abort on first misroute in non-bounce mode.
         // Note: This means we may undercount if Lumo queues multiple misrouted calls

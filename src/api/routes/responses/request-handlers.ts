@@ -28,28 +28,6 @@ import {
 } from '../shared.js';
 import { sendServerError } from '../../error-handler.js';
 
-// ── Native (misrouted) tool call parsing ───────────────────────────
-
-/**
- * Parse the JSON tool call Lumo emitted through its native SSE channel
- * (stored on ChatResult.message.toolCall) into name + stringified arguments.
- * Returns null if the JSON is missing or malformed.
- */
-function parseNativeToolCall(toolCallJson: string | undefined): { name: string; arguments: string } | null {
-  if (!toolCallJson) return null;
-  try {
-    const parsed = JSON.parse(toolCallJson) as { name?: unknown; arguments?: unknown };
-    if (typeof parsed.name !== 'string') return null;
-    const args = typeof parsed.arguments === 'object' && parsed.arguments !== null && !Array.isArray(parsed.arguments)
-      ? parsed.arguments as Record<string, unknown>
-      : {};
-    return { name: parsed.name, arguments: JSON.stringify(args) };
-  } catch {
-    logger.warn({ toolCall: toolCallJson }, 'Failed to parse native custom tool call');
-    return null;
-  }
-}
-
 // ── Output building ────────────────────────────────────────────────
 
 interface ToolCall {
@@ -213,23 +191,9 @@ export async function handleRequest(
 
       logger.debug('[Server] Stream completed');
       processor.finalize();
+      persistTitle(result, deps, conversationId);
       toolCallsForPersist = mapToolCallsForPersistence(processor.toolCallsEmitted);
 
-      // Forward a custom tool call Lumo emitted through its native SSE channel
-      // ("misrouted") directly, instead of bouncing it back as JSON text.
-      if (result.misrouted) {
-        const native = parseNativeToolCall(result.message.toolCall);
-        if (native) {
-          const callId = generateCallId(native.name);
-          emitter?.emitFunctionCallEvents(id, callId, native.name, native.arguments, nextOutputIndex++);
-          toolCallsForPersist = [
-            ...(toolCallsForPersist ?? []),
-            { name: native.name, arguments: native.arguments, call_id: callId },
-          ];
-        }
-      }
-
-      persistTitle(result, deps, conversationId);
       persistAssistantTurn(deps, conversationId, result.message, toolCallsForPersist);
     } catch (error) {
       logger.error({ error: String(error) }, 'Response error');

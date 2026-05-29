@@ -11,7 +11,7 @@ For CLI local actions (file operations, code execution), see [local-actions.md](
 Custom tool support is experimental. Tool calls can fail because of:
 
 - **Too many tools**: Lumo gets confused when the client provides many tools or (very) long instructions.
-- **Misrouted calls**: Lumo routes custom tools through its native pipeline, which fails server-side. lumo-tamer detects this and forwards the call directly to the client (see [Misrouted Tool Calls](#misrouted-tool-calls)).
+- **Misrouted calls**: Lumo routes custom tools through its native pipeline, which fails server-side and drops the arguments. lumo-tamer detects this and bounces the call back so Lumo re-emits it as JSON text with arguments (see [Misrouted Tool Calls](#misrouted-tool-calls)).
 - **Wrong tool/arguments**: Lumo sets the wrong tool name or arguments.
 - **Detection failures**: JSON code blocks are not properly detected or parsed.
 
@@ -141,7 +141,8 @@ server:
 - If prefix is causing issues, set to `""` to disable
 
 **Lumo says "I don't have access to that tool"**
-- This is a misrouted call. lumo-tamer suppresses this fallback text and forwards the call directly, so the client still receives the tool call.
+- This is a misrouted call being bounced. lumo-tamer asks Lumo to re-emit it as JSON text; it usually resolves automatically.
+- If persistent, check logs for `Bouncing misrouted tool call` and whether the bounced response contains valid JSON.
 
 ---
 
@@ -183,7 +184,7 @@ Native and custom tools work together: native tools execute server-side, custom 
    {"name": "user:get_weather", "arguments": {"city": "Paris"}}
    ```
    ````
-   *If Lumo misroutes the tool call through its native pipeline, lumo-tamer forwards it directly to the client. See [Misrouted Tool Calls](#misrouted-tool-calls).*
+   *If Lumo misroutes the tool call through its native pipeline, lumo-tamer bounces it so Lumo re-emits it as JSON text with arguments. See [Misrouted Tool Calls](#misrouted-tool-calls).*
 5. **lumo-tamer detects and extracts** tool calls, strips the prefix, and returns in OpenAI format
 6. **Your client executes** the tool and sends results back
 
@@ -212,15 +213,18 @@ Native and custom tools work together: native tools execute server-side, custom 
 
 ## Misrouted Tool Calls
 
-Sometimes Lumo routes a custom tool through its native SSE pipeline instead of outputting JSON text. This always fails server-side because Proton's backend doesn't know the tool. But the native `tool_call` event still carries the tool name and arguments Lumo intended.
+Sometimes Lumo routes a custom tool through its native SSE pipeline instead of outputting JSON text. This always fails server-side because Proton's backend doesn't know the tool. Crucially, the native `tool_call` event **drops the custom-tool arguments** (Lumo doesn't know the client-defined schema), so forwarding it directly produces an argument-less, broken call. Lumo's text/JSON path, by contrast, reliably carries the arguments.
 
 ### What Happens
 
 1. lumo-tamer detects the misrouted call (tool name not in `KNOWN_NATIVE_TOOLS`)
 2. Aborts the stream early and suppresses Lumo's error fallback ("I don't have access to that tool...")
-3. Strips the prefix and **forwards the call directly** to the client as a normal tool call
+3. **Bounces** the call: sends a follow-up request with `instructions.forToolBounce` plus the call as a JSON example, asking Lumo to re-emit it as JSON text
+4. Lumo re-emits the call (now with arguments) on the text path; the `StreamingToolDetector` parses it and forwards it to the client
 
-This is transparent to API clients. Earlier versions instead "bounced" the call (sent a second request asking Lumo to re-emit JSON text); that doubled latency and frequently lost the call. Direct forwarding is faster and more reliable. The legacy `instructions.forToolBounce` setting is no longer used.
+This is transparent to API clients (it costs one extra round-trip). Bouncing is capped at one retry to avoid loops.
+
+> Note: a previous version forwarded the misrouted native call directly. That was reverted because the native channel omits the arguments, so clients like OpenCode received calls with missing required parameters (e.g. `glob` without `pattern`) and rejected them.
 
 ---
 
@@ -231,4 +235,4 @@ This is transparent to API clients. Earlier versions instead "bounced" the call 
 | `src/api/instructions.ts` | Instruction template assembly |
 | `src/api/tools/streaming-tool-detector.ts` | `StreamingToolDetector` for streaming text detection |
 | `src/api/tools/native-tool-call-processor.ts` | Native SSE tool call parsing + misroute detection |
-| `src/lumo-client/client.ts` | Keeps misrouted tool calls for direct forwarding; stream idle timeout |
+| `src/lumo-client/client.ts` | Misrouted tool bounce logic; stream idle timeout |

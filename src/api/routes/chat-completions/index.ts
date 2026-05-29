@@ -8,7 +8,7 @@ import { getMetrics } from '../../../app/metrics.js';
 import { ChatCompletionEventEmitter } from './events.js';
 import type { Turn } from '../../../lumo-client/index.js';
 import type { ConversationId } from '../../../conversations/types.js';
-import { generateCallId, trackCustomToolCompletion } from '../../tools/call-id.js';
+import { trackCustomToolCompletion } from '../../tools/call-id.js';
 import { createStreamingToolProcessor } from '../../tools/streaming-processor.js';
 import {
   buildRequestContext,
@@ -162,33 +162,6 @@ async function handleChatRequest(
     },
   });
 
-  // Forward a custom tool call that Lumo emitted through its native SSE channel
-  // ("misrouted"). Instead of bouncing (asking Lumo to re-type it as JSON text),
-  // we forward it directly as an OpenAI tool call.
-  function emitNativeCustomToolCall(toolCallJson: string | undefined): void {
-    if (!toolCallJson) return;
-
-    try {
-      const parsed = JSON.parse(toolCallJson) as { name?: unknown; arguments?: unknown };
-      if (typeof parsed.name !== 'string') return;
-
-      const args = typeof parsed.arguments === 'object' && parsed.arguments !== null && !Array.isArray(parsed.arguments)
-        ? parsed.arguments as Record<string, unknown>
-        : {};
-      const callId = generateCallId(parsed.name);
-      const toolCall = {
-        id: callId,
-        type: 'function' as const,
-        function: { name: parsed.name, arguments: JSON.stringify(args) },
-      };
-
-      toolCalls = [...(toolCalls ?? []), toolCall];
-      emitter?.emitToolCallDelta(callId, parsed.name, args);
-    } catch {
-      logger.warn({ toolCall: toolCallJson }, 'Failed to parse native custom tool call');
-    }
-  }
-
   // Check for command before calling Lumo
   const commandResult = await tryExecuteCommand(turns, ctx.commandContext);
   if (commandResult) {
@@ -207,17 +180,14 @@ async function handleChatRequest(
 
       logger.debug('[Server] Stream completed');
       processor.finalize();
-      toolCalls = processor.toolCallsEmitted.length > 0 ? processor.toolCallsEmitted : undefined;
-      if (result.misrouted) {
-        emitNativeCustomToolCall(result.message.toolCall);
-      }
       persistTitle(result, deps, conversationId);
+      toolCalls = processor.toolCallsEmitted.length > 0 ? processor.toolCallsEmitted : undefined;
 
       persistAssistantTurn(
         deps,
         conversationId,
         result.message,
-        mapToolCallsForPersistence(toolCalls ?? [])
+        mapToolCallsForPersistence(processor.toolCallsEmitted)
       );
     } catch (error) {
       logger.error({ error: String(error) }, 'Chat completion error');

@@ -116,4 +116,10 @@ export interface ChatResult {
     nativeToolCallFailed?: boolean;
     /** Whether a misrouted custom tool was detected (routed through native SSE pipeline) */
     misrouted?: boolean;
+    /**
+     * Parsed native tool call (for bounce handling).
+     * Only set when misrouted=true, used to build the bounce instruction.
+     * @internal
+     */
+    _nativeToolCallForBounce?: ParsedToolCall;
 }

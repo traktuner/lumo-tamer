@@ -24,14 +24,14 @@ import {
     type RequestId,
     type ToolName,
     type Turn,
+    type ParsedToolCall,
     type AssistantMessageData,
     type LumoClientOptions,
     type ChatResult,
 } from './types.js';
-import { getLogConfig, getConfigMode, getCustomToolsConfig, getEnableWebSearch, getLumoConfig } from '../app/config.js';
+import { getInstructionsConfig, getLogConfig, getConfigMode, getCustomToolsConfig, getEnableWebSearch, getLumoConfig } from '../app/config.js';
 import { injectInstructionsIntoTurns } from './instructions.js';
 import { NativeToolCallProcessor } from '../api/tools/native-tool-call-processor.js';
-import { stripToolPrefix } from '../api/tools/prefix.js';
 import { postProcessTitle } from '@lumo/lib/lumo-api-client/utils.js';
 
 // Re-export types for external consumers
@@ -40,6 +40,26 @@ export type { LumoClientOptions, ChatResult };
 const DEFAULT_INTERNAL_TOOLS: ToolName[] = ['proton_info'];
 const DEFAULT_EXTERNAL_TOOLS: ToolName[] = ['web_search', 'weather', 'stock', 'cryptocurrency'];
 const DEFAULT_ENDPOINT = 'ai/v1/chat';
+
+/** Build the bounce instruction: config text + the misrouted tool call as a JSON example.
+ *  Lumo's native (misrouted) tool_call channel drops the custom-tool arguments, so we ask
+ *  Lumo to re-emit the call as JSON text - the text path reliably carries arguments. */
+function buildBounceInstruction(toolCall: ParsedToolCall): string {
+    const instruction = getInstructionsConfig().forToolBounce;
+
+    // In server mode, re-add the prefix to the tool name in the example
+    // (the name in toolCall has already been stripped).
+    let toolName = toolCall.name;
+    if (getConfigMode() === 'server') {
+        const prefix = getCustomToolsConfig().prefix;
+        if (prefix && !toolName.startsWith(prefix)) {
+            toolName = `${prefix}${toolName}`;
+        }
+    }
+
+    const toolCallJson = JSON.stringify({ name: toolName, arguments: toolCall.arguments }, null, 2);
+    return `${instruction}\n${toolCallJson}`;
+}
 
 export class LumoClient {
     constructor(
@@ -80,6 +100,8 @@ export class LumoClient {
         },
         /** Aborts the upstream request when the stream stalls (idle timeout). */
         abortController?: AbortController,
+        /** When true, ignore misrouted detection (this IS the bounce response). */
+        isBounce = false,
     ): Promise<ChatResult> {
         const reader = stream.getReader();
         const decoder = new TextDecoder('utf-8');
@@ -88,7 +110,7 @@ export class LumoClient {
         let fullTitle = '';
 
         // Native tool call processing (SSE tool_call/tool_result targets)
-        const nativeToolProcessor = new NativeToolCallProcessor();
+        const nativeToolProcessor = new NativeToolCallProcessor(isBounce);
         let suppressChunks = false;
         let abortEarly = false;
 
@@ -194,20 +216,14 @@ export class LumoClient {
             nativeToolProcessor.finalize();
             const nativeResult = nativeToolProcessor.getResult();
 
-            // Build message data for persistence / API forwarding.
-            // Lumo sometimes emits custom tools through the native SSE tool_call
-            // channel ("misrouted"). Keep those calls so the OpenAI-compatible
-            // routes can forward them directly to the client instead of asking
-            // Lumo to re-emit them as Markdown JSON (the old, lossy "bounce").
+            // Build message data for persistence.
+            // Only include native tool data when NOT misrouted: misrouted custom-tool
+            // calls come through Lumo's native channel WITHOUT their arguments, so
+            // forwarding them produces broken calls. They are bounced instead (see below).
             const message: AssistantMessageData = { content: fullResponse };
-            if (nativeResult.toolCall) {
-                // Prefix stripping only applies to server mode (custom tools).
-                const prefix = getConfigMode() === 'server' ? getCustomToolsConfig().prefix : '';
-                const toolName = nativeResult.misrouted
-                    ? stripToolPrefix(nativeResult.toolCall.name, prefix)
-                    : nativeResult.toolCall.name;
+            if (nativeResult.toolCall && !nativeResult.misrouted) {
                 message.toolCall = JSON.stringify({
-                    name: toolName,
+                    name: nativeResult.toolCall.name,
                     arguments: nativeResult.toolCall.arguments,
                 });
                 if (nativeResult.toolResult) {
@@ -220,6 +236,8 @@ export class LumoClient {
                 title: fullTitle || undefined,
                 nativeToolCallFailed: nativeResult.toolCall ? nativeResult.failed : undefined,
                 misrouted: nativeResult.misrouted,
+                // Keep parsed tool call for bounce handling (internal use only)
+                _nativeToolCallForBounce: nativeResult.misrouted ? nativeResult.toolCall : undefined,
             };
         } finally {
             // May throw if a read is still pending after an idle-timeout abort.
@@ -236,6 +254,8 @@ export class LumoClient {
         turns: Turn[],
         onChunk?: (content: string) => void,
         options: LumoClientOptions = {},
+        /** Internal: prevents infinite bounce loops. Do not set externally. */
+        isBounce = false,
     ): Promise<ChatResult> {
         const {
             enableEncryption = this.defaultOptions?.enableEncryption ?? true,
@@ -313,7 +333,7 @@ export class LumoClient {
             enableEncryption,
             requestKey: encryptionParams?.requestKey,
             requestId: encryptionParams?.requestId,
-        }, abortController);
+        }, abortController, isBounce);
 
         // Log response
         if (logConfig.messageContent) {
@@ -326,10 +346,28 @@ export class LumoClient {
             }
         }
 
+        // Bounce misrouted tool calls: Lumo routed a custom tool through its native
+        // pipeline (which drops the arguments). Ask it to re-emit the call as JSON
+        // text - the text path reliably carries arguments. Capped at one retry via isBounce.
+        if (!isBounce && result.misrouted && result._nativeToolCallForBounce) {
+            const bounceInstruction = buildBounceInstruction(result._nativeToolCallForBounce);
+            logger.info({ tool: result._nativeToolCallForBounce.name }, 'Bouncing misrouted tool call');
+
+            const bounceTurns: Turn[] = [
+                ...turns,
+                { role: Role.Assistant, content: result.message.content },
+                { role: Role.User, content: bounceInstruction },
+            ];
+
+            return this.chatWithHistory(bounceTurns, onChunk, options, true);
+        }
+
         // Post-process title (remove quotes, trim, limit length)
         return {
             ...result,
             title: result.title ? postProcessTitle(result.title) : undefined,
+            // Clear internal field from final result
+            _nativeToolCallForBounce: undefined,
         };
     }
 }
