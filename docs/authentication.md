@@ -52,16 +52,22 @@ auth:
   method: login
   login:
     binaryPath: "./dist/proton-auth"
-    # Headers to help avoid CAPTCHA
-    appVersion: "macos-drive@1.0.0-alpha.1+rclone"
+    # Must be a current Proton app version (see Post-Quantum note below)
+    appVersion: "web-lumo@5.0.0"
     userAgent: "Mozilla/5.0 ..."
 ```
 
 ### Limitations
 
-- **CAPTCHA**: May trigger CAPTCHA on Proton's servers (see tip above)
+- **CAPTCHA**: May trigger CAPTCHA on Proton's servers (see tip above). The older
+  `macos-drive@...+rclone` version avoided CAPTCHA but is rejected for Post-Quantum accounts.
 - **No conversation sync**: Cannot fetch userKeys/masterKeys due to API scope restrictions
 - **TOTP only**: Only supports TOTP for 2FA (no security keys)
+
+> **Post-Quantum cryptography:** If your account opted into Proton's Post-Quantum crypto
+> feature, login fails with `APP_VERSION_BAD` (Code 5003, HTTP 422) when an outdated
+> `appVersion` is used. Use a current version like `web-lumo@5.0.0` (the default). If that
+> triggers a CAPTCHA the login method can't solve, use **browser** auth instead.
 
 ### Troubleshooting
 

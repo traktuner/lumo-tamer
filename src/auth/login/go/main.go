@@ -28,8 +28,11 @@ type AuthResult struct {
 }
 
 // Default values for headers (can be overridden via CLI flags)
+// appVersion must be a current Proton app version: PQC-opted-in accounts reject
+// outdated versions with APP_VERSION_BAD (Code 5003, HTTP 422). lumo-tamer normally
+// passes --app-version from config.yaml; this default is only used when run standalone.
 const (
-	defaultAppVersion = "macos-drive@1.0.0-alpha.1+rclone"
+	defaultAppVersion = "web-lumo@5.0.0"
 	defaultUserAgent  = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 

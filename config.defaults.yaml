@@ -38,8 +38,13 @@ auth:
   login:
     # Path to proton-auth Go binary
     binaryPath: "./dist/proton-auth"
-    # Headers to help avoid CAPTCHA - see docs/authentication.md
-    appVersion: "macos-drive@1.0.0-alpha.1+rclone"
+    # X-PM-AppVersion sent during SRP login.
+    # Must be a current Proton app version. Accounts that opted into Post-Quantum
+    # cryptography reject outdated versions with "APP_VERSION_BAD" (Code 5003, HTTP 422).
+    # We use the official WebClients Lumo version (keep in sync with packages/lumo/src/config.ts).
+    # The old rclone-style version ("macos-drive@1.0.0-alpha.1+rclone") avoided CAPTCHA but is
+    # rejected for PQC accounts. If you hit a CAPTCHA with the version below, use browser auth.
+    appVersion: "web-lumo@5.0.0"
     userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 # Test/development configuration
