@@ -95,6 +95,14 @@ commands:
   # Example: "tamer help" instead of "/help"
   wakeword: "tamer"
 
+# Shared upstream Lumo connection tuning (can be overridden in server/cli sections)
+lumo:
+  # Abort a streaming response if Lumo sends no data for this many milliseconds.
+  # Protects against requests hanging forever when the upstream stalls mid-stream
+  # (e.g. Lumo stops sending tokens). The client gets a clear error instead of
+  # waiting for its own (usually much longer) timeout. Set to 0 to disable.
+  streamIdleTimeoutMs: 120000
+
 # Server Configuration
 server:
   port: 3003

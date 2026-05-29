@@ -11,7 +11,7 @@ For CLI local actions (file operations, code execution), see [local-actions.md](
 Custom tool support is experimental. Tool calls can fail because of:
 
 - **Too many tools**: Lumo gets confused when the client provides many tools or (very) long instructions.
-- **Misrouted calls**: Lumo routes custom tools through its native pipeline, which fails server-side. lumo-tamer bounces these back, but this adds latency and isn't always reliable.
+- **Misrouted calls**: Lumo routes custom tools through its native pipeline, which fails server-side. lumo-tamer detects this and forwards the call directly to the client (see [Misrouted Tool Calls](#misrouted-tool-calls)).
 - **Wrong tool/arguments**: Lumo sets the wrong tool name or arguments.
 - **Detection failures**: JSON code blocks are not properly detected or parsed.
 
@@ -141,8 +141,7 @@ server:
 - If prefix is causing issues, set to `""` to disable
 
 **Lumo says "I don't have access to that tool"**
-- This is a misrouted call being bounced - should resolve automatically
-- If persistent, check logs for bounce failures
+- This is a misrouted call. lumo-tamer suppresses this fallback text and forwards the call directly, so the client still receives the tool call.
 
 ---
 
@@ -184,7 +183,7 @@ Native and custom tools work together: native tools execute server-side, custom 
    {"name": "user:get_weather", "arguments": {"city": "Paris"}}
    ```
    ````
-   *If Lumo misroutes the tool call through its native pipeline, lumo-tamer bounces it, after which Lumo will output JSON (hopefully). See [Misrouted Tool Calls](#misrouted-tool-calls).*
+   *If Lumo misroutes the tool call through its native pipeline, lumo-tamer forwards it directly to the client. See [Misrouted Tool Calls](#misrouted-tool-calls).*
 5. **lumo-tamer detects and extracts** tool calls, strips the prefix, and returns in OpenAI format
 6. **Your client executes** the tool and sends results back
 
@@ -213,17 +212,15 @@ Native and custom tools work together: native tools execute server-side, custom 
 
 ## Misrouted Tool Calls
 
-Sometimes Lumo routes a custom tool through its native SSE pipeline instead of outputting JSON text. This always fails because Proton's backend doesn't know the tool.
+Sometimes Lumo routes a custom tool through its native SSE pipeline instead of outputting JSON text. This always fails server-side because Proton's backend doesn't know the tool. But the native `tool_call` event still carries the tool name and arguments Lumo intended.
 
 ### What Happens
 
 1. lumo-tamer detects the misrouted call (tool name not in `KNOWN_NATIVE_TOOLS`)
-2. Suppresses Lumo's error response ("I don't have access to that tool...")
-3. Bounces the call back with `instructions.forToolBounce`
-4. Lumo re-outputs the tool call as JSON text
-5. Normal detection extracts the tool call
+2. Aborts the stream early and suppresses Lumo's error fallback ("I don't have access to that tool...")
+3. Strips the prefix and **forwards the call directly** to the client as a normal tool call
 
-This is transparent to API clients - the bounce happens internally.
+This is transparent to API clients. Earlier versions instead "bounced" the call (sent a second request asking Lumo to re-emit JSON text); that doubled latency and frequently lost the call. Direct forwarding is faster and more reliable. The legacy `instructions.forToolBounce` setting is no longer used.
 
 ---
 
@@ -232,6 +229,6 @@ This is transparent to API clients - the bounce happens internally.
 | File | Purpose |
 |------|---------|
 | `src/api/instructions.ts` | Instruction template assembly |
-| `src/api/routes/responses/tool-processor.ts` | `StreamingToolDetector` for streaming detection |
-| `src/api/tool-parser.ts` | Non-streaming tool call extraction |
-| `src/lumo-client/client.ts` | Misrouted tool bounce logic |
+| `src/api/tools/streaming-tool-detector.ts` | `StreamingToolDetector` for streaming text detection |
+| `src/api/tools/native-tool-call-processor.ts` | Native SSE tool call parsing + misroute detection |
+| `src/lumo-client/client.ts` | Keeps misrouted tool calls for direct forwarding; stream idle timeout |

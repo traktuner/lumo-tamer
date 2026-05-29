@@ -27,8 +27,11 @@ export const customScenarios: Record<string, ScenarioGenerator> = {
         // through its native pipeline instead of outputting it as text. Always fails server-side.
         // Based on real logs: concatenated retried tool calls, error results, then fallback text.
         //
+        // lumo-tamer now forwards the misrouted native tool call directly, so the bounce
+        // branch below is no longer triggered in normal operation (kept for reference).
+        //
         // Phase detection is turn-based:
-        //   Bounce:   last user turn contains the bounce instruction ("built-in tool system")
+        //   Bounce (legacy): last user turn contains the bounce instruction ("built-in tool system")
         //   Follow-up: turns contain an assistant turn (multi-turn) or more than 1 turn
         //   Misrouted: everything else (simple first user message)
 

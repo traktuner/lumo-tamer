@@ -326,6 +326,19 @@ openssl rand -base64 32 > secrets/lumo-vault-key
 chmod 600 secrets/lumo-vault-key
 ```
 
+#### Use the prebuilt image (optional)
+
+A `latest` image is published to GHCR on every push to `main` by the
+[Docker publish workflow](.github/workflows/docker-publish.yml):
+
+```bash
+docker pull ghcr.io/traktuner/lumo-tamer:latest
+```
+
+To run it via Docker Compose, replace `build: .` with
+`image: ghcr.io/traktuner/lumo-tamer:latest` in the `tamer` service (a commented
+line is already provided in `docker-compose.yml`).
+
 ### Configure
 
 Create `config.yaml`:

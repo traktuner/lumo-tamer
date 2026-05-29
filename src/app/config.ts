@@ -10,7 +10,7 @@ const configDefaults = loadDefaultsYaml();
 export type ConfigMode = 'server' | 'cli';
 
 // Shared keys that can be overridden per mode
-const SHARED_KEYS = ['log', 'conversations', 'commands'] as const;
+const SHARED_KEYS = ['log', 'conversations', 'commands', 'lumo'] as const;
 
 // ============================================
 // Schemas (validation only, no defaults)
@@ -23,6 +23,12 @@ const logConfigSchema = z.object({
   messageContent: z.boolean(),
 });
 
+
+// Upstream Lumo connection tuning (shared between server and CLI)
+const lumoConfigSchema = z.object({
+  // Abort a streaming response if Lumo sends no data for this many ms (0 = disabled).
+  streamIdleTimeoutMs: z.number().int().min(0),
+});
 
 const conversationsConfigSchema = z.object({
   deriveIdFromUser: z.boolean(),
@@ -119,6 +125,7 @@ const serverMergedConfigSchema = z.object({
   log: logConfigSchema,
   conversations: conversationsConfigSchema,
   commands: z.object({ enabled: z.boolean(), wakeword: z.string() }),
+  lumo: lumoConfigSchema,
   enableWebSearch: z.boolean(),
   customTools: customToolsConfigSchema,
   instructions: serverInstructionsConfigSchema,
@@ -135,6 +142,7 @@ const cliMergedConfigSchema = z.object({
   log: logConfigSchema,
   conversations: conversationsConfigSchema,
   commands: z.object({ enabled: z.boolean(), wakeword: z.string() }),
+  lumo: lumoConfigSchema,
   enableWebSearch: z.boolean(),
   localActions: localActionsConfigSchema,
   instructions: cliInstructionsConfigSchema,
@@ -224,6 +232,7 @@ function getConfig(): MergedConfig {
 export const getLogConfig = () => getConfig().log;
 export const getConversationsConfig = () => getConfig().conversations;
 export const getCommandsConfig = () => getConfig().commands;
+export const getLumoConfig = () => getConfig().lumo;
 export const getEnableWebSearch = () => getConfig().enableWebSearch;
 
 // Server-specific getters

@@ -182,13 +182,13 @@ describe('/v1/responses', () => {
     });
   });
 
-  describe('misroutedToolCall scenario (bounce)', () => {
+  describe('misroutedToolCall scenario (direct forward)', () => {
     let ts: TestServer;
     const dummyTools = [{ type: 'function', function: { name: 'GetLiveContext', parameters: {} } }];
 
     beforeAll(async () => {
       ts = await createTestServer('misroutedToolCall', { metrics: true });
-      // Enable custom tool detection so the bounce response JSON is parsed
+      // Enable custom tool detection so the misrouted native tool call is forwarded
       (getCustomToolsConfig() as any).enabled = true;
     });
     afterAll(async () => {
@@ -196,7 +196,7 @@ describe('/v1/responses', () => {
       await ts.close();
     });
 
-    it('non-streaming: bounces misrouted call and returns function_call from text detection', async () => {
+    it('non-streaming: forwards misrouted native call as function_call', async () => {
       const res = await postResponses(ts, { input: 'Hello', stream: false, tools: dummyTools });
 
       expect(res.status).toBe(200);
@@ -204,21 +204,21 @@ describe('/v1/responses', () => {
 
       expect(body.status).toBe('completed');
 
-      // Should have a function_call output item for GetLiveContext (detected from bounce response text)
+      // Should have a function_call output item for GetLiveContext (forwarded from native SSE channel)
       const functionCall = body.output.find((o: any) => o.type === 'function_call');
       expect(functionCall).toBeDefined();
       expect(functionCall.name).toBe('GetLiveContext');
       expect(functionCall.status).toBe('completed');
     });
 
-    it('streaming: bounces misrouted call and emits function_call events', async () => {
+    it('streaming: forwards misrouted native call and emits function_call events', async () => {
       const res = await postResponses(ts, { input: 'Hello', stream: true, tools: dummyTools });
 
       expect(res.status).toBe(200);
       const text = await res.text();
       const events = parseSSEEvents(text);
 
-      // Should have function_call output item added event (from bounce response text detection)
+      // Should have function_call output item added event (forwarded from native SSE channel)
       const functionCallAdded = events.find(e => {
         const data = e.data as any;
         return data?.type === 'response.output_item.added' && data?.item?.type === 'function_call';

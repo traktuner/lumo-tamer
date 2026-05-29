@@ -18,10 +18,23 @@ import { getCustomToolsConfig } from '../../app/config.js';
 import { getMetrics } from '../../app/metrics.js';
 import { logger } from '../../app/logger.js';
 import type { ParsedToolCall } from './types.js';
+import type { ToolName } from '../../lumo-client/types.js';
 
-const KNOWN_NATIVE_TOOLS = new Set([
-  'proton_info', 'web_search', 'weather', 'stock', 'cryptocurrency'
-]);
+// Lumo's native (server-side) tools. Kept in sync with the upstream `ToolName`
+// union via the Record below: if a future `npm run sync-upstream` adds a tool to
+// `ToolName`, this object stops compiling until the new tool is listed here.
+// Any tool name NOT in this set is treated as a (misrouted) custom client tool.
+const NATIVE_TOOL_NAMES: Record<ToolName, true> = {
+  proton_info: true,
+  web_search: true,
+  weather: true,
+  stock: true,
+  cryptocurrency: true,
+  generate_image: true,
+  describe_image: true,
+  edit_image: true,
+};
+const KNOWN_NATIVE_TOOLS = new Set<string>(Object.keys(NATIVE_TOOL_NAMES));
 
 // ── Internal helpers ─────────────────────────────────────────────────
 

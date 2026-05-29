@@ -1,7 +1,10 @@
 services:
 
   tamer:
+    # Build locally...
     build: .
+    # ...or pull the prebuilt image published by the GitHub Actions workflow:
+    # image: ghcr.io/traktuner/lumo-tamer:latest
     container_name: lumo-tamer
     ports:
       - "3003:3003"

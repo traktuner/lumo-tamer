@@ -24,14 +24,14 @@ import {
     type RequestId,
     type ToolName,
     type Turn,
-    type ParsedToolCall,
     type AssistantMessageData,
     type LumoClientOptions,
     type ChatResult,
 } from './types.js';
-import { getInstructionsConfig, getLogConfig, getConfigMode, getCustomToolsConfig, getEnableWebSearch } from '../app/config.js';
+import { getLogConfig, getConfigMode, getCustomToolsConfig, getEnableWebSearch, getLumoConfig } from '../app/config.js';
 import { injectInstructionsIntoTurns } from './instructions.js';
 import { NativeToolCallProcessor } from '../api/tools/native-tool-call-processor.js';
+import { stripToolPrefix } from '../api/tools/prefix.js';
 import { postProcessTitle } from '@lumo/lib/lumo-api-client/utils.js';
 
 // Re-export types for external consumers
@@ -40,25 +40,6 @@ export type { LumoClientOptions, ChatResult };
 const DEFAULT_INTERNAL_TOOLS: ToolName[] = ['proton_info'];
 const DEFAULT_EXTERNAL_TOOLS: ToolName[] = ['web_search', 'weather', 'stock', 'cryptocurrency'];
 const DEFAULT_ENDPOINT = 'ai/v1/chat';
-
-/** Build the bounce instruction: config text + the misrouted tool call as JSON example.
- *  Includes the prefix in the example JSON so Lumo outputs it correctly. */
-function buildBounceInstruction(toolCall: ParsedToolCall): string {
-    const instruction = getInstructionsConfig().forToolBounce;
-
-    // In server mode, add the prefix to the tool name in the example
-    // (the tool name in toolCall has already been stripped, so we re-add it)
-    let toolName = toolCall.name;
-    if (getConfigMode() === 'server') {
-        const prefix = getCustomToolsConfig().prefix;
-        if (prefix && !toolName.startsWith(prefix)) {
-            toolName = `${prefix}${toolName}`;
-        }
-    }
-
-    const toolCallJson = JSON.stringify({ name: toolName, arguments: toolCall.arguments }, null, 2);
-    return `${instruction}\n${toolCallJson}`;
-}
 
 export class LumoClient {
     constructor(
@@ -97,8 +78,8 @@ export class LumoClient {
             requestKey?: AesGcmCryptoKey;
             requestId?: RequestId;
         },
-        /** When true, ignore misrouted tool calls (they're stale leftovers in bounce responses). */
-        isBounce = false,
+        /** Aborts the upstream request when the stream stalls (idle timeout). */
+        abortController?: AbortController,
     ): Promise<ChatResult> {
         const reader = stream.getReader();
         const decoder = new TextDecoder('utf-8');
@@ -107,7 +88,7 @@ export class LumoClient {
         let fullTitle = '';
 
         // Native tool call processing (SSE tool_call/tool_result targets)
-        const nativeToolProcessor = new NativeToolCallProcessor(isBounce);
+        const nativeToolProcessor = new NativeToolCallProcessor();
         let suppressChunks = false;
         let abortEarly = false;
 
@@ -162,9 +143,36 @@ export class LumoClient {
             }
         };
 
+        // Abort the upstream request and break the read loop if Lumo sends no
+        // data for `idleTimeoutMs`. Prevents requests hanging forever when the
+        // upstream stalls mid-stream. 0 disables the timeout.
+        const idleTimeoutMs = getLumoConfig().streamIdleTimeoutMs;
+        const readWithIdleTimeout = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+            if (idleTimeoutMs <= 0) return reader.read();
+
+            const readPromise = reader.read();
+            // Swallow the late rejection if the timeout wins the race (the abort
+            // below rejects this read), so it doesn't surface as an unhandled rejection.
+            readPromise.catch(() => { /* handled via timeout */ });
+
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const timeout = new Promise<never>((_, reject) => {
+                timer = setTimeout(() => {
+                    logger.warn({ idleTimeoutMs }, 'Lumo stream stalled, aborting');
+                    abortController?.abort();
+                    reject(new Error(`Lumo stream stalled: no data received for ${idleTimeoutMs}ms`));
+                }, idleTimeoutMs);
+            });
+            try {
+                return await Promise.race([readPromise, timeout]);
+            } finally {
+                if (timer) clearTimeout(timer);
+            }
+        };
+
         try {
             while (true) {
-                const { done, value } = await reader.read();
+                const { done, value } = await readWithIdleTimeout();
                 if (done) break;
 
                 const chunk = decoder.decode(value, { stream: true });
@@ -186,12 +194,20 @@ export class LumoClient {
             nativeToolProcessor.finalize();
             const nativeResult = nativeToolProcessor.getResult();
 
-            // Build message data for persistence
-            // Only include native tool data if not misrouted (misrouted calls are bounced)
+            // Build message data for persistence / API forwarding.
+            // Lumo sometimes emits custom tools through the native SSE tool_call
+            // channel ("misrouted"). Keep those calls so the OpenAI-compatible
+            // routes can forward them directly to the client instead of asking
+            // Lumo to re-emit them as Markdown JSON (the old, lossy "bounce").
             const message: AssistantMessageData = { content: fullResponse };
-            if (nativeResult.toolCall && !nativeResult.misrouted) {
+            if (nativeResult.toolCall) {
+                // Prefix stripping only applies to server mode (custom tools).
+                const prefix = getConfigMode() === 'server' ? getCustomToolsConfig().prefix : '';
+                const toolName = nativeResult.misrouted
+                    ? stripToolPrefix(nativeResult.toolCall.name, prefix)
+                    : nativeResult.toolCall.name;
                 message.toolCall = JSON.stringify({
-                    name: nativeResult.toolCall.name,
+                    name: toolName,
                     arguments: nativeResult.toolCall.arguments,
                 });
                 if (nativeResult.toolResult) {
@@ -204,11 +220,10 @@ export class LumoClient {
                 title: fullTitle || undefined,
                 nativeToolCallFailed: nativeResult.toolCall ? nativeResult.failed : undefined,
                 misrouted: nativeResult.misrouted,
-                // Keep parsed tool call for bounce handling (internal use only)
-                _nativeToolCallForBounce: nativeResult.misrouted ? nativeResult.toolCall : undefined,
             };
         } finally {
-            reader.releaseLock();
+            // May throw if a read is still pending after an idle-timeout abort.
+            try { reader.releaseLock(); } catch { /* ignore */ }
         }
     }
 
@@ -221,8 +236,6 @@ export class LumoClient {
         turns: Turn[],
         onChunk?: (content: string) => void,
         options: LumoClientOptions = {},
-        /** Internal: prevents infinite bounce loops. Do not set externally. */
-        isBounce = false,
     ): Promise<ChatResult> {
         const {
             enableEncryption = this.defaultOptions?.enableEncryption ?? true,
@@ -284,18 +297,23 @@ export class LumoClient {
 
         const payload = { Prompt: request };
 
+        // AbortController lets the idle-timeout in processStream cancel the
+        // underlying fetch when Lumo stalls mid-stream.
+        const abortController = new AbortController();
+
         const stream = (await this.protonApi({
             url: endpoint,
             method: 'post',
             data: payload,
             output: 'stream',
+            signal: abortController.signal,
         })) as ReadableStream<Uint8Array>;
 
         const result = await this.processStream(stream, onChunk, {
             enableEncryption,
             requestKey: encryptionParams?.requestKey,
             requestId: encryptionParams?.requestId,
-        }, isBounce);
+        }, abortController);
 
         // Log response
         if (logConfig.messageContent) {
@@ -308,26 +326,10 @@ export class LumoClient {
             }
         }
 
-        // Bounce misrouted tool calls: ask Lumo to re-output as JSON text
-        if (!isBounce && result.misrouted && result._nativeToolCallForBounce) {
-            const bounceInstruction = buildBounceInstruction(result._nativeToolCallForBounce);
-            logger.info({ tool: result._nativeToolCallForBounce.name }, 'Bouncing misrouted tool call');
-
-            const bounceTurns: Turn[] = [
-                ...turns,
-                { role: Role.Assistant, content: result.message.content },
-                { role: Role.User, content: bounceInstruction },
-            ];
-
-            return this.chatWithHistory(bounceTurns, onChunk, options, true);
-        }
-
         // Post-process title (remove quotes, trim, limit length)
         return {
             ...result,
             title: result.title ? postProcessTitle(result.title) : undefined,
-            // Clear internal field from final result
-            _nativeToolCallForBounce: undefined,
         };
     }
 }
